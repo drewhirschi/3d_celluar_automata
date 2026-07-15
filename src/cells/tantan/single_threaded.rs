@@ -5,11 +5,7 @@ use bevy::{
     tasks::TaskPool,
 };
 
-use crate::{
-    cell_renderer::{CellRenderer},
-    rule::Rule,
-    utils,
-};
+use crate::{cell_renderer::CellRenderer, rule::Rule, utils};
 
 use super::CellState;
 
@@ -90,17 +86,12 @@ impl CellsSinglethreaded {
     pub fn apply_changes(&mut self, rule: &Rule) {
         // apply new spawns
         for (cell_pos, neighbours) in self.spawn.iter() {
-            self.states.insert(
-                *cell_pos,
-                CellState::new(
-                    rule.states,
-                    *neighbours,
-                ),
-            );
+            self.states
+                .insert(*cell_pos, CellState::new(rule.states, *neighbours));
         }
         // apply state changes
         for changes in self.changes.iter() {
-            let mut cell = self.states.get_mut(changes.0).unwrap();
+            let cell = self.states.get_mut(changes.0).unwrap();
             let value = cell.value as i32 + changes.1;
             let value = i32::min(value, rule.states as i32);
             cell.value = value as u8;
@@ -114,7 +105,6 @@ impl CellsSinglethreaded {
         self.neighbours.clear();
     }
 }
-
 
 impl crate::cells::Sim for CellsSinglethreaded {
     fn update(&mut self, rule: &Rule, _task_pool: &TaskPool) {
@@ -134,10 +124,6 @@ impl crate::cells::Sim for CellsSinglethreaded {
         });
     }
 
-    fn cell_count(&self) -> usize {
-        self.states.len()
-    }
-
     fn bounds(&self) -> i32 {
         self.bounding_size
     }
@@ -150,4 +136,3 @@ impl crate::cells::Sim for CellsSinglethreaded {
         new_bounds
     }
 }
-

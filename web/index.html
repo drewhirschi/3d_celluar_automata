@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#111718">
+    <title>Cellular Automata</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <canvas id="cellular-automata" aria-label="Interactive three-dimensional cellular automata"></canvas>
+    <main id="loading" role="status" aria-live="polite">
+      <div class="loading-mark" aria-hidden="true"></div>
+      <h1>Cellular Automata</h1>
+      <p id="loading-status">Starting WebGPU</p>
+    </main>
+    <script type="module">
+      const loading = document.querySelector("#loading");
+      const status = document.querySelector("#loading-status");
+
+      async function start() {
+        if (!("gpu" in navigator)) {
+          throw new Error("WebGPU is unavailable. Open this page in a current Chrome, Edge, Firefox, or Safari browser with hardware acceleration enabled.");
+        }
+
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          throw new Error("WebGPU could not access a graphics adapter. Check browser hardware acceleration and GPU policy settings.");
+        }
+
+        status.textContent = "Loading simulation";
+        const { default: init } = await import("./cellular_automata.js");
+        await init();
+        loading.classList.add("is-hidden");
+      }
+
+      start().catch((error) => {
+        console.error(error);
+        loading.classList.add("has-error");
+        status.textContent = error instanceof Error ? error.message : String(error);
+      });
+    </script>
+  </body>
+</html>

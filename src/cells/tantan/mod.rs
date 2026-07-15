@@ -4,7 +4,6 @@ pub use single_threaded::*;
 mod multi_threaded;
 pub use multi_threaded::*;
 
-
 #[derive(Debug)]
 struct CellState {
     value: u8,
@@ -13,9 +12,6 @@ struct CellState {
 
 impl CellState {
     pub fn new(value: u8, neighbours: u8) -> Self {
-        CellState {
-            value,
-            neighbours,
-        }
+        CellState { value, neighbours }
     }
 }

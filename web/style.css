@@ -1,0 +1,103 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #9fddeb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #9fddeb;
+}
+
+#cellular-automata {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  outline: none;
+  touch-action: none;
+}
+
+#loading {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 32px;
+  color: #f4f7f6;
+  background: #111718;
+  transition: opacity 180ms ease, visibility 180ms ease;
+}
+
+#loading.is-hidden {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading-mark {
+  width: 18px;
+  height: 18px;
+  background: #ef3e4a;
+  box-shadow: 22px 0 0 #24a6a8, 0 22px 0 #f2bd48, 22px 22px 0 #f4f7f6;
+  animation: pulse 900ms ease-in-out infinite alternate;
+}
+
+#loading h1 {
+  margin: 20px 0 0;
+  font-size: 38px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+#loading p {
+  max-width: 620px;
+  margin: 0;
+  color: #aeb9b7;
+  font-size: 15px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+#loading.has-error .loading-mark {
+  background: #ef3e4a;
+  box-shadow: none;
+  animation: none;
+}
+
+#loading.has-error p {
+  color: #f4c6c9;
+}
+
+@keyframes pulse {
+  from {
+    opacity: 0.45;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #loading,
+  .loading-mark {
+    transition: none;
+    animation: none;
+  }
+}
+
+@media (max-width: 600px) {
+  #loading h1 {
+    font-size: 28px;
+  }
+}

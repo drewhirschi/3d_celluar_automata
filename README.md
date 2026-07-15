@@ -12,6 +12,34 @@ There are various implementations by
 * [TanTanDev](https://github.com/TanTanDev)
 * [leddoo](https://github.com/leddoo)
 
+## Run natively
+
+```bash
+cargo run --release
+```
+
+## Run in a browser
+
+The web build uses WebAssembly for the Rust application and WebGPU for rendering.
+
+Install the one-time build prerequisites:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install --locked wasm-bindgen-cli --version 0.2.126
+```
+
+Build and serve the static web application:
+
+```bash
+scripts/build-web.sh
+scripts/serve-web.sh
+```
+
+Then open `http://127.0.0.1:8080`. Production deployments must use HTTPS for WebGPU. The generated static site is written to `web/dist`.
+
+Drag to orbit, scroll or pinch to zoom, and use the control panel to pause, step, change tick rate, resize the volume, recolor the cells, or load a preset.
+
 
 ## License
 3d_celluar_automata is free and open source! All code in this repository is dual-licensed under either:

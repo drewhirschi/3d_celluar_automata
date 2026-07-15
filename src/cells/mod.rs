@@ -1,6 +1,5 @@
-use bevy::{tasks::TaskPool};
-use crate::{rule::Rule, cell_renderer::CellRenderer};
-
+use crate::{cell_renderer::CellRenderer, rule::Rule};
+use bevy::tasks::TaskPool;
 
 pub trait Sim: Send + Sync {
     fn update(&mut self, rule: &Rule, task_pool: &TaskPool);
@@ -14,15 +13,13 @@ pub trait Sim: Send + Sync {
 
     fn spawn_noise(&mut self, rule: &Rule);
 
-    fn cell_count(&self) -> usize;
-
     fn bounds(&self) -> i32;
     fn set_bounds(&mut self, new_bounds: i32) -> i32;
 }
 
-
 pub mod sims;
 pub use sims::*;
 
-pub mod tantan;
 pub mod leddoo;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tantan;

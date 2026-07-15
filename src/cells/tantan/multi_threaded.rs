@@ -1,17 +1,13 @@
 use std::{collections::HashMap, sync::Mutex};
 
 use bevy::{
-    math::{IVec3},
-    tasks::{TaskPool, Task},
+    math::IVec3,
+    tasks::{Task, TaskPool},
 };
 use futures_lite::future;
 use std::sync::{Arc, RwLock};
 
-use crate::{
-    cell_renderer::{CellRenderer},
-    rule::Rule,
-    utils,
-};
+use crate::{cell_renderer::CellRenderer, rule::Rule, utils};
 
 use super::CellState;
 
@@ -82,14 +78,16 @@ impl CellsMultithreaded {
                 }
             }
             // no neighbour is counted for current cell so add them to the mask
-            self.states.read().unwrap().iter().for_each(|s| {
-                match self.change_mask.get_mut(&s.0) {
+            self.states
+                .read()
+                .unwrap()
+                .iter()
+                .for_each(|s| match self.change_mask.get_mut(&s.0) {
                     Some(masked) => *masked = true,
                     None => {
                         self.change_mask.insert(*s.0, true);
                     }
-                }
-            });
+                });
             for cached_vec in self.position_thread_cache.iter() {
                 cached_vec.lock().unwrap().clear();
             }
@@ -117,9 +115,7 @@ impl CellsMultithreaded {
         }
     }
 
-    pub fn calculate_neighbours(&mut self, rule: &Rule, task_pool: &TaskPool)
-        -> Vec<Task<()>>
-    {
+    pub fn calculate_neighbours(&mut self, rule: &Rule, task_pool: &TaskPool) -> Vec<Task<()>> {
         let states = self.states.read().unwrap();
         let job_count = task_pool.thread_num();
         let chunk_size = ((states.len() as f32 / job_count as f32).ceil() as usize).max(1);
@@ -174,9 +170,7 @@ impl CellsMultithreaded {
         tasks
     }
 
-    pub fn calculate_changes(&mut self, rule: &Rule, task_pool: &TaskPool)
-        -> Vec<Task<()>>
-    {
+    pub fn calculate_changes(&mut self, rule: &Rule, task_pool: &TaskPool) -> Vec<Task<()>> {
         let job_count = task_pool.thread_num();
         let chunk_size =
             ((self.change_mask.len() as f32 / job_count as f32).ceil() as usize).max(1);
@@ -251,7 +245,7 @@ impl CellsMultithreaded {
         for (cell_pos, state_change) in self.changes.iter() {
             match state_change {
                 StateChange::Decay => {
-                    let mut cell = states.get_mut(cell_pos).unwrap();
+                    let cell = states.get_mut(cell_pos).unwrap();
                     // DECAY BY 1 value
                     let value = cell.value as i32 - 1;
                     let value = i32::min(value, rule.states as i32);
@@ -259,13 +253,7 @@ impl CellsMultithreaded {
                 }
                 StateChange::Spawn { neighbours } => {
                     // TODODDKJ
-                    states.insert(
-                        *cell_pos,
-                        CellState::new(
-                            rule.states,
-                            *neighbours,
-                        ),
-                    );
+                    states.insert(*cell_pos, CellState::new(rule.states, *neighbours));
                 }
             }
         }
@@ -280,7 +268,6 @@ impl CellsMultithreaded {
         self.neighbours.write().unwrap().clear();
     }
 }
-
 
 impl crate::cells::Sim for CellsMultithreaded {
     fn update(&mut self, rule: &Rule, task_pool: &TaskPool) {
@@ -301,10 +288,6 @@ impl crate::cells::Sim for CellsMultithreaded {
         });
     }
 
-    fn cell_count(&self) -> usize {
-        self.states.read().unwrap().len()
-    }
-    
     fn bounds(&self) -> i32 {
         self.bounding_size
     }

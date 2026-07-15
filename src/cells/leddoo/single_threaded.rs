@@ -9,17 +9,9 @@
         - on my machine, this is ~20x faster than tantan's single threaded impl.
 */
 
-use bevy::{
-    math::{IVec3},
-    tasks::TaskPool,
-};
+use bevy::{math::IVec3, tasks::TaskPool};
 
-use crate::{
-    cell_renderer::{CellRenderer},
-    rule::Rule,
-    utils,
-};
-
+use crate::{cell_renderer::CellRenderer, rule::Rule, utils};
 
 #[derive(Clone, Copy)]
 struct Cell {
@@ -32,7 +24,6 @@ impl Cell {
         self.value == 0
     }
 }
-
 
 pub struct LeddooSingleThreaded {
     cells: Vec<Cell>,
@@ -51,23 +42,16 @@ impl LeddooSingleThreaded {
         if new_bounds != self.bounds {
             self.cells.clear();
             self.cells.resize(
-                (new_bounds*new_bounds*new_bounds) as usize,
-                Cell { value: 0, neighbors: 0 });
+                (new_bounds * new_bounds * new_bounds) as usize,
+                Cell {
+                    value: 0,
+                    neighbors: 0,
+                },
+            );
             self.bounds = new_bounds;
         }
         self.bounds
     }
-
-    pub fn cell_count(&self) -> usize {
-        let mut result = 0;
-        for cell in &self.cells {
-            if !cell.is_dead() {
-                result += 1;
-            }
-        }
-        result
-    }
-
 
     fn index_to_pos(&self, index: usize) -> IVec3 {
         utils::index_to_pos(index, self.bounds)
@@ -81,7 +65,6 @@ impl LeddooSingleThreaded {
         utils::wrap(pos, self.bounds)
     }
 
-
     fn update_neighbors(&mut self, rule: &Rule, index: usize, inc: bool) {
         let pos = self.index_to_pos(index);
         for dir in rule.neighbour_method.get_neighbour_iter() {
@@ -90,8 +73,7 @@ impl LeddooSingleThreaded {
             let index = self.pos_to_index(neighbor_pos);
             if inc {
                 self.cells[index].neighbors += 1;
-            }
-            else {
+            } else {
                 self.cells[index].neighbors -= 1;
             }
         }
@@ -110,8 +92,7 @@ impl LeddooSingleThreaded {
                     cell.value = rule.states;
                     spawns.push(index);
                 }
-            }
-            else {
+            } else {
                 if cell.value < rule.states || !rule.survival_rule.in_range(cell.neighbors) {
                     if cell.value == rule.states {
                         deaths.push(index);
@@ -161,7 +142,6 @@ impl LeddooSingleThreaded {
     }
 }
 
-
 impl crate::cells::Sim for LeddooSingleThreaded {
     fn update(&mut self, rule: &Rule, _task_pool: &TaskPool) {
         self.update(rule);
@@ -177,15 +157,36 @@ impl crate::cells::Sim for LeddooSingleThreaded {
         self.spawn_noise(rule);
     }
 
-    fn cell_count(&self) -> usize {
-        self.cell_count()
-    }
-
     fn bounds(&self) -> i32 {
         self.bounds
     }
 
     fn set_bounds(&mut self, new_bounds: i32) -> i32 {
         self.set_bounds(new_bounds)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{neighbours::NeighbourMethod, rule::Value};
+
+    #[test]
+    fn cached_neighbor_counts_stay_consistent() {
+        let rule = Rule {
+            survival_rule: Value::new(&[2, 6, 9]),
+            birth_rule: Value::new(&[4, 6, 8, 9, 10]),
+            states: 10,
+            neighbour_method: NeighbourMethod::Moore,
+        };
+        let mut cells = LeddooSingleThreaded::new();
+        cells.set_bounds(16);
+        cells.spawn_noise(&rule);
+        cells.validate(&rule);
+
+        for _ in 0..5 {
+            cells.update(&rule);
+            cells.validate(&rule);
+        }
     }
 }
