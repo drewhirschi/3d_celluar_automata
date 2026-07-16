@@ -24,8 +24,9 @@ Open `http://127.0.0.1:5173`.
   ping-pong layout avoids cross-workgroup data races.
 - State is encoded as `state / states`; only the fully alive state contributes
   to the next generation's neighbor count.
-- A Three.js raymarching material samples the current texture directly. No cell
-  state is copied through JavaScript during simulation or rendering.
+- A compute pass compacts nonzero texels into a packed GPU instance buffer and
+  updates an indirect draw count. Three.js then rasterizes one depth-tested cube
+  per visible cell without copying cell state through JavaScript.
 - `src/sim/reference.ts` is a small CPU implementation used as a correctness
   oracle for rule semantics and toroidal boundaries.
 

@@ -11,12 +11,22 @@ import {
 } from 'lucide';
 
 import { GpuAutomaton } from './automaton';
-import { getPreset, maskFromCounts, parseCounts, RULE_PRESETS, type RulePreset } from './rules';
+import { CellStyle, GpuCellRenderer } from './cell-renderer';
+import {
+  getPreset,
+  maskFromCounts,
+  parseCounts,
+  RULE_PRESETS,
+  type ColorMode,
+  type RulePreset,
+} from './rules';
 import type { AutomatonRule, Neighborhood } from './sim/reference';
-import { createVolumeMaterial, VolumeStyle } from './volume-material';
 import './styles.css';
 
 const ICONS = { Dices, Pause, Play, RotateCcw, StepForward, Trash2 };
+const DEFAULT_TICK_RATE = 10;
+const MAX_TICK_RATE = 2_000;
+const MAX_STEPS_PER_FRAME = 32;
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -40,19 +50,20 @@ class CellularAutomataApp {
   private readonly camera = new THREE.PerspectiveCamera(42, 1, 0.01, 20);
   private readonly orbit: OrbitControls;
   private readonly automaton: GpuAutomaton;
-  private readonly volumeStyle = new VolumeStyle();
+  private readonly cellStyle = new CellStyle();
   private readonly resizeObserver: ResizeObserver;
-  private readonly volumeMesh: THREE.Mesh<THREE.BoxGeometry, THREE.NodeMaterial>;
 
-  private volumeMaterials: [THREE.NodeMaterial, THREE.NodeMaterial] | null = null;
+  private cellRenderer: GpuCellRenderer | null = null;
   private rule: AutomatonRule = getPreset('builder');
   private running = true;
-  private tickRate = 10;
+  private tickRate = DEFAULT_TICK_RATE;
   private accumulator = 0;
   private lastFrameTime = performance.now();
   private lastMetricsTime = 0;
   private frameCount = 0;
+  private metricStepCount = 0;
   private fps = 0;
+  private simulationTps = 0;
   private seedDensity = 0.55;
   private seedRadius = 6;
   private bounds = 64;
@@ -62,7 +73,7 @@ class CellularAutomataApp {
     this.renderer = renderer;
     this.automaton = new GpuAutomaton(renderer);
 
-    this.scene.background = new THREE.Color('#101112');
+    this.scene.background = new THREE.Color('#a6e6f5');
     this.camera.position.set(1.15, 0.85, 1.35);
 
     this.orbit = new OrbitControls(this.camera, this.canvas);
@@ -76,12 +87,10 @@ class CellularAutomataApp {
     this.orbit.autoRotateSpeed = 0.45;
     this.orbit.update();
 
-    const geometry = new THREE.BoxGeometry(1, 1, 1);
-    this.volumeMesh = new THREE.Mesh(geometry, new THREE.NodeMaterial());
-    this.volumeMesh.frustumCulled = false;
-    this.scene.add(this.volumeMesh);
-
-    const bounds = new THREE.Box3(new THREE.Vector3(-0.505, -0.505, -0.505), new THREE.Vector3(0.505, 0.505, 0.505));
+    const bounds = new THREE.Box3(
+      new THREE.Vector3(-0.505, -0.505, -0.505),
+      new THREE.Vector3(0.505, 0.505, 0.505),
+    );
     const boundsHelper = new THREE.Box3Helper(bounds, new THREE.Color('#4d5557'));
     this.scene.add(boundsHelper);
 
@@ -105,8 +114,7 @@ class CellularAutomataApp {
       powerPreference: 'high-performance',
     });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.AgXToneMapping;
-    renderer.toneMappingExposure = 1.1;
+    renderer.toneMapping = THREE.NoToneMapping;
     try {
       await renderer.init();
     } catch (error) {
@@ -120,7 +128,7 @@ class CellularAutomataApp {
     this.buildPanel();
     this.automaton.configureSeed(this.seedDensity, this.seedRadius);
     this.automaton.rebuild(this.bounds, this.rule);
-    this.rebuildVolumeMaterials();
+    this.rebuildCellRenderer();
     this.resize();
     this.setStatus('WebGPU resident', 'ready');
     this.renderer.setAnimationLoop((time) => this.animate(time));
@@ -142,6 +150,7 @@ class CellularAutomataApp {
 
       <section class="metrics" aria-label="Performance metrics">
         <div><strong id="metric-generation">0</strong><span>generation</span></div>
+        <div><strong id="metric-tps">0</strong><span>simulation tps</span></div>
         <div><strong id="metric-fps">0</strong><span>fps</span></div>
         <div><strong id="metric-cells">262k</strong><span>cells / tick</span></div>
       </section>
@@ -185,7 +194,7 @@ class CellularAutomataApp {
           </label>
           <label class="field">
             <span>Ticks / sec</span>
-            <input id="tick-rate" type="number" min="1" max="60" step="1" value="10" />
+            <input id="tick-rate" type="number" min="1" max="2000" step="1" value="10" />
           </label>
         </div>
 
@@ -223,13 +232,20 @@ class CellularAutomataApp {
 
       <section class="control-section appearance-section">
         <div class="section-heading"><h2>Appearance</h2></div>
+        <label class="field full-field">
+          <span>Color mapping</span>
+          <select id="color-mode">
+            <option value="distance">Distance to center</option>
+            <option value="state">Cell state</option>
+          </select>
+        </label>
         <div class="field-grid color-grid">
-          <label class="color-field"><span>Decay</span><input id="color-low" type="color" value="#ffe36e" /></label>
-          <label class="color-field"><span>Alive</span><input id="color-high" type="color" value="#ff4f78" /></label>
+          <label class="color-field"><span id="color-low-label">Center</span><input id="color-low" type="color" value="#ffff00" /></label>
+          <label class="color-field"><span id="color-high-label">Edge</span><input id="color-high" type="color" value="#ff0000" /></label>
         </div>
         <label class="range-field">
-          <span><span>Ray steps</span><output id="steps-value">160</output></span>
-          <input id="ray-steps" type="range" min="64" max="320" step="16" value="160" />
+          <span><span>Cell size</span><output id="cell-scale-value">90%</output></span>
+          <input id="cell-scale" type="range" min="0.55" max="1" step="0.01" value="0.9" />
         </label>
         <div class="field-grid">
           <label class="field">
@@ -259,20 +275,19 @@ class CellularAutomataApp {
       if (this.running) {
         this.setRunning(false);
       }
-      this.automaton.step();
-      this.syncVolumeMaterial();
+      this.advanceSimulation();
     });
     element<HTMLButtonElement>('reset').addEventListener('click', () => {
       this.automaton.reset(1);
-      this.syncVolumeMaterial();
+      this.refreshCells();
     });
     element<HTMLButtonElement>('reseed').addEventListener('click', () => {
       this.automaton.reset();
-      this.syncVolumeMaterial();
+      this.refreshCells();
     });
     element<HTMLButtonElement>('clear').addEventListener('click', () => {
       this.automaton.clear();
-      this.syncVolumeMaterial();
+      this.refreshCells();
     });
 
     element<HTMLSelectElement>('preset').addEventListener('change', (event) => {
@@ -295,7 +310,9 @@ class CellularAutomataApp {
 
     element<HTMLInputElement>('tick-rate').addEventListener('change', (event) => {
       const value = Number((event.currentTarget as HTMLInputElement).value);
-      this.tickRate = Number.isFinite(value) ? THREE.MathUtils.clamp(Math.round(value), 1, 60) : 10;
+      this.tickRate = Number.isFinite(value)
+        ? THREE.MathUtils.clamp(Math.round(value), 1, MAX_TICK_RATE)
+        : DEFAULT_TICK_RATE;
       (event.currentTarget as HTMLInputElement).value = String(this.tickRate);
       this.accumulator = 0;
     });
@@ -308,7 +325,7 @@ class CellularAutomataApp {
     });
     density.addEventListener('change', () => {
       this.automaton.reset();
-      this.syncVolumeMaterial();
+      this.refreshCells();
     });
 
     const radius = element<HTMLInputElement>('seed-radius');
@@ -319,7 +336,7 @@ class CellularAutomataApp {
     });
     radius.addEventListener('change', () => {
       this.automaton.reset();
-      this.syncVolumeMaterial();
+      this.refreshCells();
     });
 
     for (const id of ['survival', 'birth', 'states']) {
@@ -341,18 +358,23 @@ class CellularAutomataApp {
     }
 
     const updateColors = (): void => {
-      this.volumeStyle.setColors(
+      this.cellStyle.setColors(
         element<HTMLInputElement>('color-low').value,
         element<HTMLInputElement>('color-high').value,
       );
     };
     element<HTMLInputElement>('color-low').addEventListener('input', updateColors);
     element<HTMLInputElement>('color-high').addEventListener('input', updateColors);
+    element<HTMLSelectElement>('color-mode').addEventListener('change', (event) => {
+      this.applyColorMode((event.currentTarget as HTMLSelectElement).value as ColorMode);
+    });
 
-    const steps = element<HTMLInputElement>('ray-steps');
-    steps.addEventListener('input', () => {
-      this.volumeStyle.steps.value = Number(steps.value);
-      element<HTMLOutputElement>('steps-value').value = steps.value;
+    const cellScale = element<HTMLInputElement>('cell-scale');
+    cellScale.addEventListener('input', () => {
+      this.cellStyle.scale.value = Number(cellScale.value);
+      element<HTMLOutputElement>('cell-scale-value').value = `${Math.round(
+        this.cellStyle.scale.value * 100,
+      )}%`;
     });
 
     element<HTMLSelectElement>('render-scale').addEventListener('change', (event) => {
@@ -368,9 +390,11 @@ class CellularAutomataApp {
     element<HTMLInputElement>('survival').value = preset.survival.join(', ');
     element<HTMLInputElement>('birth').value = preset.birth.join(', ');
     element<HTMLInputElement>('states').value = String(preset.states);
+    element<HTMLSelectElement>('color-mode').value = preset.colorMode;
     element<HTMLInputElement>('color-low').value = preset.colorLow;
     element<HTMLInputElement>('color-high').value = preset.colorHigh;
-    this.volumeStyle.setColors(preset.colorLow, preset.colorHigh);
+    this.cellStyle.setColors(preset.colorLow, preset.colorHigh);
+    this.applyColorMode(preset.colorMode);
 
     for (const button of this.panel.querySelectorAll<HTMLButtonElement>('[data-neighborhood]')) {
       const selected = button.dataset.neighborhood === preset.neighborhood;
@@ -380,6 +404,12 @@ class CellularAutomataApp {
 
     this.rule = preset;
     this.updateRuleCode(preset.survival, preset.birth, preset.states);
+  }
+
+  private applyColorMode(mode: ColorMode): void {
+    this.cellStyle.setColorMode(mode);
+    element<HTMLElement>('color-low-label').textContent = mode === 'distance' ? 'Center' : 'Decay';
+    element<HTMLElement>('color-high-label').textContent = mode === 'distance' ? 'Edge' : 'Alive';
   }
 
   private applyRuleFromPanel(): void {
@@ -413,7 +443,7 @@ class CellularAutomataApp {
     };
     this.automaton.applyRule(this.rule);
     this.automaton.reset(1);
-    this.syncVolumeMaterial();
+    this.refreshCells();
     this.updateRuleCode(survival, birth, states);
     this.setStatus('WebGPU resident', 'ready');
   }
@@ -424,41 +454,38 @@ class CellularAutomataApp {
   }
 
   private rebuildAutomaton(): void {
-    this.disposeVolumeMaterials();
+    this.disposeCellRenderer();
     this.automaton.configureSeed(this.seedDensity, this.seedRadius);
     this.automaton.rebuild(this.bounds, this.rule);
-    this.rebuildVolumeMaterials();
+    this.rebuildCellRenderer();
     this.accumulator = 0;
   }
 
-  private rebuildVolumeMaterials(): void {
-    const snapshot = this.automaton.snapshot();
-    this.volumeStyle.setBounds(snapshot.bounds);
-
-    const [firstTexture, secondTexture] = this.automaton.textures;
-
-    this.volumeMaterials = [
-      createVolumeMaterial(firstTexture, this.volumeStyle),
-      createVolumeMaterial(secondTexture, this.volumeStyle),
-    ];
-    this.syncVolumeMaterial();
+  private rebuildCellRenderer(): void {
+    this.cellRenderer = new GpuCellRenderer(
+      this.renderer,
+      this.automaton.textures,
+      this.automaton.bounds,
+      this.cellStyle,
+    );
+    this.scene.add(this.cellRenderer.mesh);
+    this.refreshCells();
   }
 
-  private syncVolumeMaterial(): void {
-    if (this.volumeMaterials === null) {
+  private refreshCells(): void {
+    if (this.cellRenderer === null) {
       return;
     }
-    this.volumeMesh.material = this.volumeMaterials[this.automaton.snapshot().textureIndex];
+    this.cellRenderer.compact(this.automaton.snapshot().textureIndex);
   }
 
-  private disposeVolumeMaterials(): void {
-    if (this.volumeMaterials === null) {
+  private disposeCellRenderer(): void {
+    if (this.cellRenderer === null) {
       return;
     }
-    for (const material of this.volumeMaterials) {
-      material.dispose();
-    }
-    this.volumeMaterials = null;
+    this.scene.remove(this.cellRenderer.mesh);
+    this.cellRenderer.dispose();
+    this.cellRenderer = null;
   }
 
   private setRunning(running: boolean): void {
@@ -472,6 +499,12 @@ class CellularAutomataApp {
     this.refreshIcons(toggle);
   }
 
+  private advanceSimulation(count = 1): void {
+    this.automaton.step(count);
+    this.refreshCells();
+    this.metricStepCount += count;
+  }
+
   private animate(time: number): void {
     const delta = Math.min((time - this.lastFrameTime) / 1000, 0.1);
     this.lastFrameTime = time;
@@ -479,20 +512,18 @@ class CellularAutomataApp {
     if (this.running) {
       this.accumulator += delta;
       const tickDuration = 1 / this.tickRate;
-      let catchUpSteps = 0;
+      const dueSteps = Math.min(Math.floor(this.accumulator / tickDuration), MAX_STEPS_PER_FRAME);
 
-      while (this.accumulator >= tickDuration && catchUpSteps < 4) {
-        this.automaton.step();
-        this.accumulator -= tickDuration;
-        catchUpSteps += 1;
+      if (dueSteps > 0) {
+        this.advanceSimulation(dueSteps);
+        this.accumulator -= dueSteps * tickDuration;
       }
 
-      if (catchUpSteps === 4) {
+      if (dueSteps === MAX_STEPS_PER_FRAME) {
         this.accumulator = Math.min(this.accumulator, tickDuration);
       }
     }
 
-    this.syncVolumeMaterial();
     this.orbit.update(delta);
     this.renderer.render(this.scene, this.camera);
     this.updateMetrics(time);
@@ -508,12 +539,16 @@ class CellularAutomataApp {
       return;
     }
 
-    this.fps = (this.frameCount * 1000) / (time - this.lastMetricsTime);
+    const elapsed = time - this.lastMetricsTime;
+    this.fps = (this.frameCount * 1000) / elapsed;
+    this.simulationTps = (this.metricStepCount * 1000) / elapsed;
     this.frameCount = 0;
+    this.metricStepCount = 0;
     this.lastMetricsTime = time;
     const snapshot = this.automaton.snapshot();
 
     element<HTMLElement>('metric-generation').textContent = formatInteger(snapshot.generation);
+    element<HTMLElement>('metric-tps').textContent = formatInteger(Math.round(this.simulationTps));
     element<HTMLElement>('metric-fps').textContent = this.fps.toFixed(0);
     element<HTMLElement>('metric-cells').textContent =
       snapshot.cellCount >= 1_000_000
@@ -575,9 +610,8 @@ class CellularAutomataApp {
     this.renderer.setAnimationLoop(null);
     this.resizeObserver.disconnect();
     this.orbit.dispose();
-    this.disposeVolumeMaterials();
+    this.disposeCellRenderer();
     this.automaton.dispose();
-    this.volumeMesh.geometry.dispose();
     this.renderer.dispose();
   }
 }

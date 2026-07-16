@@ -2,8 +2,7 @@
 import * as THREE from 'three/webgpu';
 import {
   Fn,
-  instanceIndex,
-  int,
+  globalId,
   ivec3,
   select,
   storageTexture3D,
@@ -41,6 +40,12 @@ const VON_NEUMANN_OFFSETS: ReadonlyArray<readonly [number, number, number]> = [
   [0, 0, 1],
 ];
 
+const WORKGROUP_SIZE = [8, 8, 4] as const;
+
+function dispatchSize(bounds: number): [number, number, number] {
+  return WORKGROUP_SIZE.map((size) => Math.ceil(bounds / size)) as [number, number, number];
+}
+
 interface TexturePair {
   textures: [THREE.Storage3DTexture, THREE.Storage3DTexture];
   initNode: THREE.ComputeNode;
@@ -64,6 +69,7 @@ export class GpuAutomaton {
   private readonly seedUniform = uniform(1, 'uint');
   private readonly seedDensityUniform = uniform(0.55);
   private readonly seedRadiusUniform = uniform(6);
+  private readonly batchCache = new Map<string, THREE.ComputeNode[]>();
 
   private resources: TexturePair | null = null;
   private textureIndex: 0 | 1 = 0;
@@ -147,17 +153,29 @@ export class GpuAutomaton {
   }
 
   step(count = 1): void {
-    if (this.resources === null) {
+    if (this.resources === null || count < 1) {
       return;
     }
 
     const nodes = this.resources.stepNodes[this.neighborhood];
+    const batchKey = `${this.neighborhood}:${this.textureIndex}:${count}`;
+    let batch = this.batchCache.get(batchKey);
 
-    for (let index = 0; index < count; index += 1) {
-      this.renderer.compute(nodes[this.textureIndex]);
-      this.textureIndex = this.textureIndex === 0 ? 1 : 0;
-      this.generationValue += 1;
+    if (batch === undefined) {
+      let textureIndex = this.textureIndex;
+      batch = [];
+      for (let index = 0; index < count; index += 1) {
+        batch.push(nodes[textureIndex]);
+        textureIndex = textureIndex === 0 ? 1 : 0;
+      }
+      this.batchCache.set(batchKey, batch);
     }
+
+    this.renderer.compute(batch.length === 1 ? batch[0] : batch);
+    if (count % 2 === 1) {
+      this.textureIndex = this.textureIndex === 0 ? 1 : 0;
+    }
+    this.generationValue += count;
   }
 
   snapshot(): AutomatonSnapshot {
@@ -180,16 +198,15 @@ export class GpuAutomaton {
       this.createTexture(bounds, 'cells-a'),
       this.createTexture(bounds, 'cells-b'),
     ];
-    const cellCount = bounds ** 3;
     const writeA = storageTexture3D(textures[0]).toWriteOnly();
 
     const initKernel = Fn(() => {
-      const id = instanceIndex;
-      const x = id.mod(bounds);
-      const y = id.div(bounds).mod(bounds);
-      const z = id.div(bounds * bounds);
-      const coordinate = uvec3(x, y, z);
-      const center = vec3(x, y, z).sub((bounds - 1) * 0.5);
+      const x = globalId.x;
+      const y = globalId.y;
+      const z = globalId.z;
+      const id = x.add(y.mul(bounds)).add(z.mul(bounds * bounds));
+      const coordinate = globalId;
+      const center = vec3(x, y, z).sub(Math.floor(bounds / 2));
 
       const hash = uint(id.add(this.seedUniform)).toVar();
       hash.assign(hash.bitXor(hash.shiftRight(16)));
@@ -199,22 +216,28 @@ export class GpuAutomaton {
       hash.assign(hash.bitXor(hash.shiftRight(16)));
 
       const random = hash.toFloat().div(4294967295);
-      const alive = center.length().lessThanEqual(this.seedRadiusUniform).and(random.lessThan(this.seedDensityUniform));
+      const insideSeed = center.x
+        .abs()
+        .lessThanEqual(this.seedRadiusUniform)
+        .and(center.y.abs().lessThanEqual(this.seedRadiusUniform))
+        .and(center.z.abs().lessThanEqual(this.seedRadiusUniform));
+      const alive = insideSeed.and(random.lessThan(this.seedDensityUniform));
       const value = select(alive, 1, 0);
 
       textureStore(writeA, coordinate, vec4(value, 0, 0, 1));
     });
 
     const clearKernel = Fn(() => {
-      const id = instanceIndex;
-      const coordinate = uvec3(id.mod(bounds), id.div(bounds).mod(bounds), id.div(bounds * bounds));
-      textureStore(writeA, coordinate, vec4(0, 0, 0, 1));
+      textureStore(writeA, globalId, vec4(0, 0, 0, 1));
     });
+
+    const dispatch = dispatchSize(bounds);
+    const workgroup = [...WORKGROUP_SIZE];
 
     return {
       textures,
-      initNode: initKernel().compute(cellCount, [64]),
-      clearNode: clearKernel().compute(cellCount, [64]),
+      initNode: initKernel().compute(dispatch, workgroup),
+      clearNode: clearKernel().compute(dispatch, workgroup),
       stepNodes: {
         moore26: [
           this.createStepNode(textures[0], textures[1], bounds, MOORE_OFFSETS),
@@ -245,19 +268,24 @@ export class GpuAutomaton {
         readCells: THREE.Texture3DNode;
         writeCells: THREE.StorageTexture3DNode;
       }) => {
-        const id = instanceIndex;
-        const x = id.mod(bounds);
-        const y = id.div(bounds).mod(bounds);
-        const z = id.div(bounds * bounds);
-        const coordinate = ivec3(int(x), int(y), int(z));
+        const x = globalId.x;
+        const y = globalId.y;
+        const z = globalId.z;
+        const coordinate = ivec3(x, y, z);
         const neighbours = uint(0).toVar();
 
+        const xMinus = select(x.equal(0), uint(bounds - 1), x.sub(1));
+        const yMinus = select(y.equal(0), uint(bounds - 1), y.sub(1));
+        const zMinus = select(z.equal(0), uint(bounds - 1), z.sub(1));
+        const xPlus = select(x.equal(bounds - 1), uint(0), x.add(1));
+        const yPlus = select(y.equal(bounds - 1), uint(0), y.add(1));
+        const zPlus = select(z.equal(bounds - 1), uint(0), z.add(1));
+
         for (const [offsetX, offsetY, offsetZ] of offsets) {
-          const neighbourCoordinate = ivec3(
-            int(x).add(bounds + offsetX).mod(bounds),
-            int(y).add(bounds + offsetY).mod(bounds),
-            int(z).add(bounds + offsetZ).mod(bounds),
-          );
+          const neighborX = offsetX < 0 ? xMinus : offsetX > 0 ? xPlus : x;
+          const neighborY = offsetY < 0 ? yMinus : offsetY > 0 ? yPlus : y;
+          const neighborZ = offsetZ < 0 ? zMinus : offsetZ > 0 ? zPlus : z;
+          const neighbourCoordinate = ivec3(neighborX, neighborY, neighborZ);
           const neighbourAlive = readCells.load(neighbourCoordinate).r.greaterThan(0.999);
           neighbours.addAssign(select(neighbourAlive, uint(1), uint(0)));
         }
@@ -278,7 +306,10 @@ export class GpuAutomaton {
       },
     );
 
-    return stepKernel({ readCells: readNode, writeCells: writeNode }).compute(bounds ** 3, [64]);
+    return stepKernel({ readCells: readNode, writeCells: writeNode }).compute(
+      dispatchSize(bounds),
+      [...WORKGROUP_SIZE],
+    );
   }
 
   private createTexture(bounds: number, name: string): THREE.Storage3DTexture {
@@ -296,6 +327,7 @@ export class GpuAutomaton {
   }
 
   private disposeResources(): void {
+    this.batchCache.clear();
     if (this.resources === null) {
       return;
     }
