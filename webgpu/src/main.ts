@@ -1,4 +1,3 @@
-// @ts-nocheck -- Types imported from the TSL integration retain recursive shader graph types.
 import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
@@ -541,14 +540,25 @@ class CellularAutomataApp {
   }
 
   private watchRendererErrors(): void {
-    const defaultOnError = this.renderer.onError;
-    const defaultOnDeviceLost = this.renderer.onDeviceLost;
+    type ErrorInfo = { type: string; message: string };
+    type DeviceLostInfo = {
+      api: string;
+      message: string;
+      reason: string | null;
+      originalEvent: unknown;
+    };
+    const runtimeRenderer = this.renderer as unknown as {
+      onError: (info: ErrorInfo) => void;
+      onDeviceLost: (info: DeviceLostInfo) => void;
+    };
+    const defaultOnError = runtimeRenderer.onError;
+    const defaultOnDeviceLost = runtimeRenderer.onDeviceLost;
 
-    this.renderer.onError = (info) => {
+    runtimeRenderer.onError = (info) => {
       defaultOnError.call(this.renderer, info);
       this.stopForGpuError(`WebGPU ${info.type}: ${info.message}`);
     };
-    this.renderer.onDeviceLost = (info) => {
+    runtimeRenderer.onDeviceLost = (info) => {
       defaultOnDeviceLost.call(this.renderer, info);
       this.stopForGpuError('WebGPU device lost. Reload to restart.');
     };
