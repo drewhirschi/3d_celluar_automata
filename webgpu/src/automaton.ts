@@ -2,6 +2,8 @@
 import * as THREE from 'three/webgpu';
 import {
   Fn,
+  If,
+  Return,
   globalId,
   ivec3,
   select,
@@ -153,7 +155,10 @@ export class GpuAutomaton {
   }
 
   step(count = 1): void {
-    if (this.resources === null || count < 1) {
+    if (!Number.isSafeInteger(count) || count < 0) {
+      throw new RangeError(`Step count must be a nonnegative safe integer: ${count}`);
+    }
+    if (this.resources === null || count === 0) {
       return;
     }
 
@@ -204,6 +209,15 @@ export class GpuAutomaton {
       const x = globalId.x;
       const y = globalId.y;
       const z = globalId.z;
+      const outsideGrid = x
+        .greaterThanEqual(uint(bounds))
+        .or(y.greaterThanEqual(uint(bounds)))
+        .or(z.greaterThanEqual(uint(bounds)));
+
+      If(outsideGrid, () => {
+        Return();
+      });
+
       const id = x.add(y.mul(bounds)).add(z.mul(bounds * bounds));
       const coordinate = globalId;
       const center = vec3(x, y, z).sub(Math.floor(bounds / 2));
@@ -228,6 +242,15 @@ export class GpuAutomaton {
     });
 
     const clearKernel = Fn(() => {
+      const outsideGrid = globalId.x
+        .greaterThanEqual(uint(bounds))
+        .or(globalId.y.greaterThanEqual(uint(bounds)))
+        .or(globalId.z.greaterThanEqual(uint(bounds)));
+
+      If(outsideGrid, () => {
+        Return();
+      });
+
       textureStore(writeA, globalId, vec4(0, 0, 0, 1));
     });
 
@@ -271,6 +294,15 @@ export class GpuAutomaton {
         const x = globalId.x;
         const y = globalId.y;
         const z = globalId.z;
+        const outsideGrid = x
+          .greaterThanEqual(uint(bounds))
+          .or(y.greaterThanEqual(uint(bounds)))
+          .or(z.greaterThanEqual(uint(bounds)));
+
+        If(outsideGrid, () => {
+          Return();
+        });
+
         const coordinate = ivec3(x, y, z);
         const neighbours = uint(0).toVar();
 

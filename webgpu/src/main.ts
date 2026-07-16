@@ -25,8 +25,19 @@ import './styles.css';
 
 const ICONS = { Dices, Pause, Play, RotateCcw, StepForward, Trash2 };
 const DEFAULT_TICK_RATE = 10;
-const MAX_TICK_RATE = 2_000;
+const MAX_TICK_RATE = 150;
 const MAX_STEPS_PER_FRAME = 32;
+const TICK_RATE_SLIDER_MAX = 1_000;
+
+function tickRateFromSlider(value: number): number {
+  const exponent = THREE.MathUtils.clamp(value, 0, TICK_RATE_SLIDER_MAX) / TICK_RATE_SLIDER_MAX;
+  return Math.round(MAX_TICK_RATE ** exponent);
+}
+
+function sliderFromTickRate(value: number): number {
+  const rate = THREE.MathUtils.clamp(value, 1, MAX_TICK_RATE);
+  return Math.round((Math.log(rate) / Math.log(MAX_TICK_RATE)) * TICK_RATE_SLIDER_MAX);
+}
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -150,7 +161,7 @@ class CellularAutomataApp {
 
       <section class="metrics" aria-label="Performance metrics">
         <div><strong id="metric-generation">0</strong><span>generation</span></div>
-        <div><strong id="metric-tps">0</strong><span>simulation tps</span></div>
+        <div><strong id="metric-tps">0</strong><span>queued tps</span></div>
         <div><strong id="metric-fps">0</strong><span>fps</span></div>
         <div><strong id="metric-cells">262k</strong><span>cells / tick</span></div>
       </section>
@@ -180,23 +191,22 @@ class CellularAutomataApp {
           <select id="preset">${presetOptions}<option value="custom">Custom</option></select>
         </label>
 
-        <div class="field-grid">
-          <label class="field">
-            <span>Grid</span>
-            <select id="bounds">
-              <option value="32">32³</option>
-              <option value="48">48³</option>
-              <option value="64" selected>64³</option>
-              <option value="96">96³</option>
-              <option value="128">128³</option>
-              <option value="160">160³</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Ticks / sec</span>
-            <input id="tick-rate" type="number" min="1" max="2000" step="1" value="10" />
-          </label>
-        </div>
+        <label class="field full-field">
+          <span>Grid</span>
+          <select id="bounds">
+            <option value="32">32³</option>
+            <option value="48">48³</option>
+            <option value="64" selected>64³</option>
+            <option value="96">96³</option>
+            <option value="128">128³</option>
+            <option value="160">160³</option>
+          </select>
+        </label>
+
+        <label class="range-field">
+          <span><span>Ticks / sec</span><output id="tick-rate-value">${DEFAULT_TICK_RATE}</output></span>
+          <input id="tick-rate" type="range" min="0" max="${TICK_RATE_SLIDER_MAX}" step="1" value="${sliderFromTickRate(DEFAULT_TICK_RATE)}" />
+        </label>
 
         <label class="range-field">
           <span><span>Seed density</span><output id="density-value">55%</output></span>
@@ -308,12 +318,10 @@ class CellularAutomataApp {
       this.rebuildAutomaton();
     });
 
-    element<HTMLInputElement>('tick-rate').addEventListener('change', (event) => {
-      const value = Number((event.currentTarget as HTMLInputElement).value);
-      this.tickRate = Number.isFinite(value)
-        ? THREE.MathUtils.clamp(Math.round(value), 1, MAX_TICK_RATE)
-        : DEFAULT_TICK_RATE;
-      (event.currentTarget as HTMLInputElement).value = String(this.tickRate);
+    element<HTMLInputElement>('tick-rate').addEventListener('input', (event) => {
+      const sliderValue = Number((event.currentTarget as HTMLInputElement).value);
+      this.tickRate = tickRateFromSlider(sliderValue);
+      element<HTMLOutputElement>('tick-rate-value').value = formatInteger(this.tickRate);
       this.accumulator = 0;
     });
 

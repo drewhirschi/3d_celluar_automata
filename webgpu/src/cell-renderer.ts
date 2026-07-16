@@ -154,9 +154,9 @@ export class GpuCellRenderer {
     const cells = texture3D(texture, null, 0);
     const compactKernel = Fn(() => {
       const outsideGrid = globalId.x
-        .greaterThanEqual(bounds)
-        .or(globalId.y.greaterThanEqual(bounds))
-        .or(globalId.z.greaterThanEqual(bounds));
+        .greaterThanEqual(uint(bounds))
+        .or(globalId.y.greaterThanEqual(uint(bounds)))
+        .or(globalId.z.greaterThanEqual(uint(bounds)));
 
       If(outsideGrid, () => {
         Return();
