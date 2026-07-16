@@ -40,6 +40,22 @@ Then open `http://127.0.0.1:8080`. Production deployments must use HTTPS for Web
 
 Drag to orbit, scroll or pinch to zoom, and use the control panel to pause, step, change tick rate, resize the volume, recolor the cells, or load a preset.
 
+## Run the WebGPU compute experiment
+
+The `webgpu` application is a separate Three.js experiment that moves both the
+cellular automaton and its 3D state textures onto the GPU. It does not download
+the Rust/Bevy WebAssembly bundle.
+
+```bash
+cd webgpu
+npm ci
+npm run dev
+```
+
+Then open `http://127.0.0.1:5173` in a browser with WebGPU support. See
+[`webgpu/README.md`](webgpu/README.md) for the architecture and verification
+commands.
+
 
 ## License
 3d_celluar_automata is free and open source! All code in this repository is dual-licensed under either:

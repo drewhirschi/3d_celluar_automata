@@ -1,2 +1,4 @@
 /target
 /web/dist
+/webgpu/dist
+/webgpu/node_modules

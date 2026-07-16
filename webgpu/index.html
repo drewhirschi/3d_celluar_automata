@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101112" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <title>3D Cellular Automata GPU Lab</title>
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="viewport" aria-label="3D cellular automata viewport"></canvas>
+      <aside id="controls" aria-label="Simulation controls"></aside>
+      <section id="status" role="status" aria-live="polite" data-state="loading">
+        <span class="status-mark"></span>
+        <span id="status-text">Starting WebGPU</span>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
