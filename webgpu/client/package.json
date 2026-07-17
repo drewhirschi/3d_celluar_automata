@@ -8,7 +8,7 @@
     "dump": "NEXTRS_SKIP_BUNDLE=1 cargo run --bin dump-openapi",
     "orval": "orval --config ./orval.config.ts",
     "gen": "npm run dump && npm run orval",
-    "test": "vitest run --root .. app/lib/sim/reference.test.ts",
+    "test": "vitest run --root ../app/lib/sim reference.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

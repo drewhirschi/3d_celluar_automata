@@ -1,11 +1,13 @@
 import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
+  Circle,
   createIcons,
   Dices,
   Pause,
   Play,
   RotateCcw,
+  Square,
   StepForward,
   Trash2,
 } from 'lucide';
@@ -22,13 +24,56 @@ import {
 } from './rules';
 import type { AutomatonRule, Neighborhood } from './sim/reference';
 
-const ICONS = { Dices, Pause, Play, RotateCcw, StepForward, Trash2 };
+const ICONS = { Circle, Dices, Pause, Play, RotateCcw, Square, StepForward, Trash2 };
 const DEFAULT_TICK_RATE = 10;
 const MAX_TICK_RATE = 150;
 const MAX_STEPS_PER_FRAME = 32;
 const TICK_RATE_SLIDER_MAX = 1_000;
+const DEFAULT_RECORD_GENERATIONS = 1_000;
+const MAX_RECORD_GENERATIONS = 100_000;
+const MIN_RECORDING_DURATION_MS = 500;
+const RECORDING_BITS_PER_PIXEL = 0.08;
+const MIN_RECORDING_BITRATE = 4_000_000;
+const MAX_RECORDING_BITRATE = 20_000_000;
+const RECORDING_MIME_TYPES = [
+  'video/mp4;codecs=avc1.42E01E',
+  'video/mp4',
+  'video/webm;codecs=vp9',
+  'video/webm;codecs=vp8',
+  'video/webm',
+] as const;
+
+type ViewAspect = 'fill' | '16:9' | '4:3' | '1:1' | '9:16';
+
+const VIEW_ASPECT_RATIOS: Record<ViewAspect, number | null> = {
+  fill: null,
+  '16:9': 16 / 9,
+  '4:3': 4 / 3,
+  '1:1': 1,
+  '9:16': 9 / 16,
+};
+
+interface ActiveRecording {
+  readonly recorder: MediaRecorder;
+  readonly stream: MediaStream;
+  readonly chunks: Blob[];
+  readonly startGeneration: number;
+  readonly targetGeneration: number;
+  readonly requestedGenerations: number;
+  readonly mimeType: string;
+  readonly minimumStopTime: number;
+  readonly frameTrack: CanvasCaptureMediaStreamTrack | null;
+  readonly frameInterval: number;
+  downloadOnStop: boolean;
+  finalFrameRendered: boolean;
+  finalFrameStopTime: number | null;
+  errorMessage: string | null;
+  nextFrameTime: number;
+  stopping: boolean;
+}
 
 export interface CellularAutomataElements {
+  stage: HTMLElement;
   canvas: HTMLCanvasElement;
   controls: HTMLElement;
   status: HTMLElement;
@@ -50,6 +95,7 @@ function formatInteger(value: number): string {
 }
 
 class CellularAutomataApp {
+  private readonly stage: HTMLElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly panel: HTMLElement;
   private readonly status: HTMLElement;
@@ -77,9 +123,15 @@ class CellularAutomataApp {
   private seedRadius = 6;
   private bounds = 64;
   private renderScale = 1;
+  private viewAspect: ViewAspect = 'fill';
+  private recording: ActiveRecording | null = null;
+  private recordingUrl: string | null = null;
+  private recordRestartAllowedAt = 0;
+  private disposed = false;
 
   private constructor(renderer: THREE.WebGPURenderer, elements: CellularAutomataElements) {
     this.renderer = renderer;
+    this.stage = elements.stage;
     this.canvas = elements.canvas;
     this.panel = elements.controls;
     this.status = elements.status;
@@ -108,7 +160,7 @@ class CellularAutomataApp {
     this.scene.add(boundsHelper);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
-    this.resizeObserver.observe(this.canvas);
+    this.resizeObserver.observe(this.stage);
     this.watchRendererErrors();
   }
 
@@ -180,6 +232,53 @@ class CellularAutomataApp {
         <div><strong id="metric-tps">0</strong><span>queued tps</span></div>
         <div><strong id="metric-fps">0</strong><span>fps</span></div>
         <div><strong id="metric-cells">262k</strong><span>cells / tick</span></div>
+      </section>
+
+      <section class="control-section recording-section">
+        <div class="section-heading">
+          <h2>Recording</h2>
+          <span id="record-dimensions">-- x --</span>
+        </div>
+        <div class="field-grid">
+          <label class="field">
+            <span>Generations</span>
+            <input id="record-generations" type="number" min="1" max="${MAX_RECORD_GENERATIONS}" step="1" value="${DEFAULT_RECORD_GENERATIONS}" />
+          </label>
+          <label class="field">
+            <span>FPS</span>
+            <select id="record-fps">
+              <option value="30">30</option>
+              <option value="60" selected>60</option>
+            </select>
+          </label>
+        </div>
+        <div class="field-grid">
+          <label class="field">
+            <span>Aspect</span>
+            <select id="view-aspect">
+              <option value="fill" selected>Fill viewport</option>
+              <option value="16:9">16:9</option>
+              <option value="4:3">4:3</option>
+              <option value="1:1">1:1</option>
+              <option value="9:16">9:16</option>
+            </select>
+          </label>
+          <label class="toggle-field">
+            <span>Start at zero</span>
+            <input id="record-reset" type="checkbox" checked />
+          </label>
+        </div>
+        <div class="recording-actions">
+          <button id="record" class="record-button" type="button">
+            <i data-lucide="circle"></i>
+            <span id="record-button-label">Record</span>
+          </button>
+          <div class="recording-progress">
+            <div><span id="record-state">ready</span><output id="record-progress-value">0 / ${formatInteger(DEFAULT_RECORD_GENERATIONS)}</output></div>
+            <progress id="record-progress" max="${DEFAULT_RECORD_GENERATIONS}" value="0"></progress>
+          </div>
+          <a id="record-download" class="record-download" hidden>Save video</a>
+        </div>
       </section>
 
       <section class="control-section">
@@ -340,6 +439,46 @@ class CellularAutomataApp {
       this.element<HTMLOutputElement>('tick-rate-value').value = formatInteger(this.tickRate);
       this.accumulator = 0;
     });
+
+    const recordGenerations = this.element<HTMLInputElement>('record-generations');
+    recordGenerations.addEventListener('input', () => {
+      const generations = Number(recordGenerations.value);
+      const valid = Number.isSafeInteger(generations) && generations >= 1 && generations <= MAX_RECORD_GENERATIONS;
+      recordGenerations.classList.toggle('invalid', !valid);
+      recordGenerations.setAttribute('aria-invalid', String(!valid));
+      if (!valid || this.recording !== null) {
+        return;
+      }
+
+      const progress = this.element<HTMLProgressElement>('record-progress');
+      progress.max = generations;
+      progress.value = 0;
+      this.element<HTMLOutputElement>('record-progress-value').value = `0 / ${formatInteger(generations)}`;
+    });
+    this.element<HTMLSelectElement>('view-aspect').addEventListener('change', (event) => {
+      const aspect = (event.currentTarget as HTMLSelectElement).value as ViewAspect;
+      if (!(aspect in VIEW_ASPECT_RATIOS)) {
+        return;
+      }
+
+      this.viewAspect = aspect;
+      this.resize();
+    });
+
+    const recordButton = this.element<HTMLButtonElement>('record');
+    recordButton.addEventListener('click', () => {
+      if (this.recording === null) {
+        if (performance.now() >= this.recordRestartAllowedAt) {
+          this.startRecording();
+        }
+      } else {
+        this.stopRecording(true);
+      }
+    });
+    if (typeof this.canvas.captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+      recordButton.disabled = true;
+      recordButton.title = 'Canvas recording is unavailable in this browser';
+    }
 
     const density = this.element<HTMLInputElement>('seed-density');
     density.addEventListener('input', () => {
@@ -523,6 +662,331 @@ class CellularAutomataApp {
     this.refreshIcons(toggle);
   }
 
+  private startRecording(): void {
+    const generationsInput = this.element<HTMLInputElement>('record-generations');
+    const requestedGenerations = Number(generationsInput.value);
+    const validGenerations =
+      Number.isSafeInteger(requestedGenerations) &&
+      requestedGenerations >= 1 &&
+      requestedGenerations <= MAX_RECORD_GENERATIONS;
+    generationsInput.classList.toggle('invalid', !validGenerations);
+    generationsInput.setAttribute('aria-invalid', String(!validGenerations));
+    if (!validGenerations) {
+      this.setStatus(`Recording length must be 1-${formatInteger(MAX_RECORD_GENERATIONS)}`, 'error');
+      return;
+    }
+
+    if (typeof this.canvas.captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+      this.setStatus('Canvas recording is unavailable in this browser', 'error');
+      return;
+    }
+    this.clearRecordingDownload();
+
+    const resetAtStart = this.element<HTMLInputElement>('record-reset').checked;
+    const startGeneration = resetAtStart ? 0 : this.automaton.generation;
+    if (startGeneration > Number.MAX_SAFE_INTEGER - requestedGenerations) {
+      this.setStatus('Generation target is too large', 'error');
+      return;
+    }
+
+    const fps = Number(this.element<HTMLSelectElement>('record-fps').value);
+    const videoBitsPerSecond = Math.round(
+      THREE.MathUtils.clamp(
+        this.canvas.width * this.canvas.height * fps * RECORDING_BITS_PER_PIXEL,
+        MIN_RECORDING_BITRATE,
+        MAX_RECORDING_BITRATE,
+      ),
+    );
+
+    let stream: MediaStream;
+    let frameTrack: CanvasCaptureMediaStreamTrack | null = null;
+    try {
+      this.renderer.render(this.scene, this.camera);
+      stream = this.canvas.captureStream(0);
+      const candidateTrack = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack | undefined;
+      if (candidateTrack !== undefined && typeof candidateTrack.requestFrame === 'function') {
+        frameTrack = candidateTrack;
+      } else {
+        for (const track of stream.getTracks()) {
+          track.stop();
+        }
+        stream = this.canvas.captureStream(fps);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.setStatus(`Recording could not start: ${message}`, 'error');
+      return;
+    }
+
+    let recorder: MediaRecorder | null = null;
+    let recorderError = 'No supported video encoder';
+    const supportedMimeTypes = RECORDING_MIME_TYPES.filter((candidate) =>
+      MediaRecorder.isTypeSupported(candidate),
+    );
+    const recorderOptions: MediaRecorderOptions[] = supportedMimeTypes.map((mimeType) => ({
+      mimeType,
+      videoBitsPerSecond,
+    }));
+    recorderOptions.push({ videoBitsPerSecond });
+    for (const options of recorderOptions) {
+      try {
+        const candidate = new MediaRecorder(stream, options);
+        candidate.start(1_000);
+        recorder = candidate;
+        break;
+      } catch (error) {
+        recorderError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    if (recorder === null) {
+      for (const track of stream.getTracks()) {
+        track.stop();
+      }
+      this.setStatus(`Recording could not start: ${recorderError}`, 'error');
+      return;
+    }
+
+    const recording: ActiveRecording = {
+      recorder,
+      stream,
+      chunks: [],
+      startGeneration,
+      targetGeneration: startGeneration + requestedGenerations,
+      requestedGenerations,
+      mimeType: recorder.mimeType,
+      minimumStopTime: performance.now() + MIN_RECORDING_DURATION_MS,
+      frameTrack,
+      frameInterval: 1_000 / fps,
+      downloadOnStop: true,
+      finalFrameRendered: false,
+      finalFrameStopTime: null,
+      errorMessage: null,
+      nextFrameTime: performance.now(),
+      stopping: false,
+    };
+    recorder.addEventListener('dataavailable', (event) => {
+      if (event.data.size > 0) {
+        recording.chunks.push(event.data);
+      }
+    });
+    recorder.addEventListener('error', (event) => {
+      const recorderError = (event as Event & { error?: DOMException }).error;
+      recording.errorMessage = recorderError?.message ?? 'The browser encoder stopped unexpectedly';
+      recording.downloadOnStop = false;
+      if (this.recording === recording) {
+        this.stopRecording(false);
+      }
+    });
+    recorder.addEventListener('stop', () => this.completeRecording(recording), { once: true });
+
+    this.recording = recording;
+    if (resetAtStart) {
+      this.automaton.reset(1);
+      this.refreshCells();
+      this.element<HTMLElement>('metric-generation').textContent = '0';
+    }
+    this.setRecordingControlsLocked(true);
+    this.updateRecordButton(true);
+    this.updateRecordingProgress();
+    this.accumulator = 0;
+    this.setRunning(true);
+    this.renderer.render(this.scene, this.camera);
+    this.captureRecordingFrame(performance.now(), true);
+  }
+
+  private stopRecording(download: boolean): void {
+    const recording = this.recording;
+    if (recording === null) {
+      return;
+    }
+    if (recording.stopping) {
+      return;
+    }
+
+    recording.stopping = true;
+    recording.downloadOnStop = download;
+    this.setRunning(false);
+    this.element<HTMLElement>('record-state').textContent = 'finalizing';
+    if (recording.recorder.state !== 'inactive') {
+      try {
+        recording.recorder.stop();
+      } catch (error) {
+        recording.errorMessage = error instanceof Error ? error.message : String(error);
+        recording.downloadOnStop = false;
+        this.completeRecording(recording);
+      }
+    }
+  }
+
+  private completeRecording(recording: ActiveRecording): void {
+    for (const track of recording.stream.getTracks()) {
+      track.stop();
+    }
+    if (this.recording !== recording) {
+      return;
+    }
+
+    this.recording = null;
+    this.recordRestartAllowedAt = performance.now() + 500;
+    this.setRecordingControlsLocked(false);
+    this.updateRecordButton(false);
+    this.resize();
+    const finalGeneration = this.automaton.generation;
+    this.element<HTMLElement>('metric-generation').textContent = formatInteger(finalGeneration);
+    const recordedGenerations = Math.max(0, finalGeneration - recording.startGeneration);
+    const progress = this.element<HTMLProgressElement>('record-progress');
+    progress.value = Math.min(recordedGenerations, recording.requestedGenerations);
+    this.element<HTMLOutputElement>('record-progress-value').value =
+      `${formatInteger(recordedGenerations)} / ${formatInteger(recording.requestedGenerations)}`;
+
+    if (recording.errorMessage !== null) {
+      this.element<HTMLElement>('record-state').textContent = 'error';
+      this.setStatus(`Recording failed: ${recording.errorMessage}`, 'error');
+      return;
+    }
+    if (!recording.downloadOnStop || this.disposed) {
+      this.element<HTMLElement>('record-state').textContent = 'ready';
+      return;
+    }
+    if (recording.chunks.length === 0) {
+      this.element<HTMLElement>('record-state').textContent = 'error';
+      this.setStatus('Recording failed: the browser returned an empty video', 'error');
+      return;
+    }
+
+    const mimeType = recording.recorder.mimeType || recording.mimeType || recording.chunks[0].type || 'video/webm';
+    const blob = new Blob(recording.chunks, { type: mimeType });
+    const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
+    const preset = this.element<HTMLSelectElement>('preset').value.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+    const range =
+      recording.startGeneration === 0
+        ? `${formatInteger(finalGeneration)}g`
+        : `${formatInteger(recording.startGeneration)}-${formatInteger(finalGeneration)}g`;
+    const filename = `3d-cellular-automata-${preset}-${range.replace(/,/g, '')}.${extension}`;
+    this.clearRecordingDownload();
+    const url = URL.createObjectURL(blob);
+    this.recordingUrl = url;
+    const link = this.element<HTMLAnchorElement>('record-download');
+    link.href = url;
+    link.download = filename;
+    link.hidden = false;
+    link.click();
+    this.element<HTMLElement>('record-state').textContent = 'saved';
+    this.setStatus(`Saved ${filename}`, 'ready');
+  }
+
+  private clearRecordingDownload(): void {
+    if (this.recordingUrl !== null) {
+      URL.revokeObjectURL(this.recordingUrl);
+      this.recordingUrl = null;
+    }
+    const link = this.panel.querySelector<HTMLAnchorElement>('#record-download');
+    if (link !== null) {
+      link.hidden = true;
+      link.removeAttribute('href');
+      link.removeAttribute('download');
+    }
+  }
+
+  private setRecordingControlsLocked(locked: boolean): void {
+    for (const control of this.panel.querySelectorAll<
+      HTMLButtonElement | HTMLInputElement | HTMLSelectElement
+    >('button, input, select')) {
+      if (control.id === 'record') {
+        continue;
+      }
+      if (locked) {
+        control.dataset.recordingWasDisabled = String(control.disabled);
+        control.disabled = true;
+      } else if (control.dataset.recordingWasDisabled !== undefined) {
+        control.disabled = control.dataset.recordingWasDisabled === 'true';
+        delete control.dataset.recordingWasDisabled;
+      }
+    }
+  }
+
+  private updateRecordButton(recording: boolean): void {
+    const button = this.element<HTMLButtonElement>('record');
+    button.classList.toggle('recording', recording);
+    button.title = recording ? 'Stop and save recording' : 'Record simulation';
+    button.ariaLabel = button.title;
+    button.innerHTML = recording
+      ? '<i data-lucide="square"></i><span id="record-button-label">Stop</span>'
+      : '<i data-lucide="circle"></i><span id="record-button-label">Record</span>';
+    this.refreshIcons(button);
+  }
+
+  private updateRecordingProgress(): void {
+    const recording = this.recording;
+    if (recording === null) {
+      return;
+    }
+
+    const completed = THREE.MathUtils.clamp(
+      this.automaton.generation - recording.startGeneration,
+      0,
+      recording.requestedGenerations,
+    );
+    const progress = this.element<HTMLProgressElement>('record-progress');
+    progress.max = recording.requestedGenerations;
+    progress.value = completed;
+    this.element<HTMLOutputElement>('record-progress-value').value =
+      `${formatInteger(completed)} / ${formatInteger(recording.requestedGenerations)}`;
+    this.element<HTMLElement>('record-state').textContent =
+      recording.finalFrameRendered || recording.stopping ? 'finalizing' : 'recording';
+    this.setStatus(
+      `Recording ${formatInteger(completed)} / ${formatInteger(recording.requestedGenerations)}`,
+      'loading',
+    );
+  }
+
+  private captureRecordingFrame(time: number, force = false): void {
+    const recording = this.recording;
+    if (
+      recording === null ||
+      recording.stopping ||
+      recording.frameTrack === null ||
+      (!force && time < recording.nextFrameTime)
+    ) {
+      return;
+    }
+
+    try {
+      recording.frameTrack.requestFrame();
+      recording.nextFrameTime = time + recording.frameInterval;
+    } catch (error) {
+      recording.errorMessage = error instanceof Error ? error.message : String(error);
+      recording.downloadOnStop = false;
+      this.stopRecording(false);
+    }
+  }
+
+  private cancelRecording(): void {
+    const recording = this.recording;
+    if (recording === null) {
+      return;
+    }
+
+    this.recording = null;
+    recording.downloadOnStop = false;
+    if (recording.recorder.state !== 'inactive') {
+      try {
+        recording.recorder.stop();
+      } catch {
+        // The stream is stopped below even if the encoder already tore down.
+      }
+    }
+    for (const track of recording.stream.getTracks()) {
+      track.stop();
+    }
+    if (!this.disposed) {
+      this.setRecordingControlsLocked(false);
+      this.updateRecordButton(false);
+      this.element<HTMLElement>('record-state').textContent = 'ready';
+      this.resize();
+    }
+  }
+
   private advanceSimulation(count = 1): void {
     this.automaton.step(count);
     this.refreshCells();
@@ -536,7 +1000,11 @@ class CellularAutomataApp {
     if (this.running) {
       this.accumulator += delta;
       const tickDuration = 1 / this.tickRate;
-      const dueSteps = Math.min(Math.floor(this.accumulator / tickDuration), MAX_STEPS_PER_FRAME);
+      let dueSteps = Math.min(Math.floor(this.accumulator / tickDuration), MAX_STEPS_PER_FRAME);
+      if (this.recording !== null) {
+        const remainingSteps = Math.max(0, this.recording.targetGeneration - this.automaton.generation);
+        dueSteps = Math.min(dueSteps, remainingSteps);
+      }
 
       if (dueSteps > 0) {
         this.advanceSimulation(dueSteps);
@@ -550,6 +1018,35 @@ class CellularAutomataApp {
 
     this.orbit.update(delta);
     this.renderer.render(this.scene, this.camera);
+    const recording = this.recording;
+    if (recording !== null && !recording.stopping) {
+      if (this.automaton.generation >= recording.targetGeneration) {
+        if (!recording.finalFrameRendered) {
+          recording.finalFrameRendered = true;
+          recording.finalFrameStopTime = Math.max(
+            recording.minimumStopTime,
+            time + recording.frameInterval,
+          );
+          this.setRunning(false);
+          this.captureRecordingFrame(time, true);
+        } else {
+          this.captureRecordingFrame(time);
+        }
+        if (
+          this.recording === recording &&
+          !recording.stopping &&
+          recording.finalFrameStopTime !== null &&
+          time >= recording.finalFrameStopTime
+        ) {
+          this.stopRecording(true);
+        }
+      } else {
+        this.captureRecordingFrame(time);
+      }
+    }
+    if (this.recording !== null) {
+      this.updateRecordingProgress();
+    }
     this.updateMetrics(time);
   }
 
@@ -581,12 +1078,35 @@ class CellularAutomataApp {
   }
 
   private resize(): void {
-    const width = Math.max(1, this.canvas.clientWidth);
-    const height = Math.max(1, this.canvas.clientHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio * this.renderScale, 2));
-    this.renderer.setSize(width, height, false);
-    this.camera.aspect = width / height;
+    if (this.recording !== null) {
+      return;
+    }
+
+    const availableWidth = Math.max(1, this.stage.clientWidth);
+    const availableHeight = Math.max(1, this.stage.clientHeight);
+    const aspectRatio = VIEW_ASPECT_RATIOS[this.viewAspect];
+    let width = availableWidth;
+    let height = availableHeight;
+    if (aspectRatio !== null) {
+      if (availableWidth / availableHeight > aspectRatio) {
+        width = Math.max(1, Math.floor(availableHeight * aspectRatio));
+      } else {
+        height = Math.max(1, Math.floor(availableWidth / aspectRatio));
+      }
+    }
+
+    this.canvas.style.width = `${width}px`;
+    this.canvas.style.height = `${height}px`;
+    const pixelRatio = Math.min(window.devicePixelRatio * this.renderScale, 2);
+    const renderWidth = Math.max(2, Math.floor((width * pixelRatio) / 2) * 2);
+    const renderHeight = Math.max(2, Math.floor((height * pixelRatio) / 2) * 2);
+    this.renderer.setDrawingBufferSize(renderWidth, renderHeight, 1);
+    this.camera.aspect = renderWidth / renderHeight;
     this.camera.updateProjectionMatrix();
+    const dimensions = this.panel.querySelector<HTMLElement>('#record-dimensions');
+    if (dimensions !== null) {
+      dimensions.textContent = `${this.canvas.width} x ${this.canvas.height}`;
+    }
   }
 
   private refreshIcons(root: HTMLElement = this.panel): void {
@@ -624,6 +1144,7 @@ class CellularAutomataApp {
   }
 
   private stopForGpuError(message: string): void {
+    this.cancelRecording();
     this.running = false;
     this.renderer.setAnimationLoop(null);
     this.status.setAttribute('role', 'alert');
@@ -631,6 +1152,9 @@ class CellularAutomataApp {
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.cancelRecording();
+    this.clearRecordingDownload();
     this.renderer.setAnimationLoop(null);
     this.resizeObserver.disconnect();
     this.orbit.dispose();

@@ -23,7 +23,7 @@ deployments must use HTTPS.
 
 ## Architecture
 
-- `app/page.tsx` renders the canvas, controls, and status nodes. Its effect
+- `app/page.tsx` renders the canvas stage, controls, and status nodes. Its effect
   mounts the WebGPU application and returns its teardown.
 - `app/layout.tsx` owns document metadata and the favicon.
 - `app/lib/cellular-automata.ts` initializes Three.js, owns the controls and
@@ -38,6 +38,20 @@ deployments must use HTTPS.
 - `app/lib/sim/reference.ts` is the CPU correctness oracle used by tests.
 - `public/style.css` is fingerprinted and linked by nextrs. Static files under
   `public/` are served from the origin root.
+
+## Record
+
+The Recording panel captures only the simulation canvas. Choose a generation
+count, 30 or 60 FPS, and a live/output aspect ratio (`Fill`, `16:9`, `4:3`,
+`1:1`, or `9:16`). `Start at zero` resets to the deterministic seed before
+capture; turn it off to record the next N generations from the current state.
+
+Recording is real-time: the simulation's ticks/sec setting controls duration.
+For example, 1,000 generations takes about 16.7 seconds at 60 ticks/sec. When
+ticks/sec exceeds capture FPS, the video matches the live view and can skip
+intermediate generations. The recorder clamps the final simulation batch to the
+exact target, downloads the browser-supported MP4 or WebM file, and keeps a
+`Save video` link available for mobile browsers.
 
 The GPU design was inspired by Isidor Nielsen's implementation shown in
 [Tantan's follow-up video](https://www.youtube.com/watch?v=jkHqrkcEHRc&t=591s).

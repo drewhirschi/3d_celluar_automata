@@ -55,7 +55,9 @@ cargo dev
 ```
 
 Then open `http://127.0.0.1:3000` in a browser with WebGPU support, or use the
-[production deployment](https://3d-cellular-automata.vercel.app). See
+[production deployment](https://3d-cellular-automata.vercel.app). The GPU lab
+can record an exact generation range from the canvas with selectable frame rate
+and aspect ratio. See
 [`webgpu/README.md`](webgpu/README.md) for the architecture and verification
 commands.
 
