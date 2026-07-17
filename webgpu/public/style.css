@@ -13,6 +13,7 @@
 
 html,
 body,
+#__nx_root__,
 #app {
   width: 100%;
   height: 100%;

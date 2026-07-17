@@ -1,0 +1,8 @@
+/target
+/public/dist
+/node_modules
+/client/node_modules
+/client/src/generated
+/.vercel
+.env*
+!.env.example

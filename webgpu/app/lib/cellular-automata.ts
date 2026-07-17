@@ -21,13 +21,19 @@ import {
   type RulePreset,
 } from './rules';
 import type { AutomatonRule, Neighborhood } from './sim/reference';
-import './styles.css';
 
 const ICONS = { Dices, Pause, Play, RotateCcw, StepForward, Trash2 };
 const DEFAULT_TICK_RATE = 10;
 const MAX_TICK_RATE = 150;
 const MAX_STEPS_PER_FRAME = 32;
 const TICK_RATE_SLIDER_MAX = 1_000;
+
+export interface CellularAutomataElements {
+  canvas: HTMLCanvasElement;
+  controls: HTMLElement;
+  status: HTMLElement;
+  statusText: HTMLElement;
+}
 
 function tickRateFromSlider(value: number): number {
   const exponent = THREE.MathUtils.clamp(value, 0, TICK_RATE_SLIDER_MAX) / TICK_RATE_SLIDER_MAX;
@@ -39,23 +45,15 @@ function sliderFromTickRate(value: number): number {
   return Math.round((Math.log(rate) / Math.log(MAX_TICK_RATE)) * TICK_RATE_SLIDER_MAX);
 }
 
-function element<T extends HTMLElement>(id: string): T {
-  const value = document.getElementById(id);
-  if (value === null) {
-    throw new Error(`Missing required element #${id}`);
-  }
-  return value as T;
-}
-
 function formatInteger(value: number): string {
   return new Intl.NumberFormat('en-US').format(value);
 }
 
 class CellularAutomataApp {
-  private readonly canvas = element<HTMLCanvasElement>('viewport');
-  private readonly panel = element<HTMLElement>('controls');
-  private readonly status = element<HTMLElement>('status');
-  private readonly statusText = element<HTMLElement>('status-text');
+  private readonly canvas: HTMLCanvasElement;
+  private readonly panel: HTMLElement;
+  private readonly status: HTMLElement;
+  private readonly statusText: HTMLElement;
   private readonly renderer: THREE.WebGPURenderer;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(42, 1, 0.01, 20);
@@ -80,8 +78,12 @@ class CellularAutomataApp {
   private bounds = 64;
   private renderScale = 1;
 
-  private constructor(renderer: THREE.WebGPURenderer) {
+  private constructor(renderer: THREE.WebGPURenderer, elements: CellularAutomataElements) {
     this.renderer = renderer;
+    this.canvas = elements.canvas;
+    this.panel = elements.controls;
+    this.status = elements.status;
+    this.statusText = elements.statusText;
     this.automaton = new GpuAutomaton(renderer);
 
     this.scene.background = new THREE.Color('#a6e6f5');
@@ -110,7 +112,7 @@ class CellularAutomataApp {
     this.watchRendererErrors();
   }
 
-  static async create(): Promise<CellularAutomataApp> {
+  static async create(elements: CellularAutomataElements): Promise<CellularAutomataApp> {
     if (!window.isSecureContext) {
       throw new Error('WebGPU requires HTTPS or localhost.');
     }
@@ -118,9 +120,8 @@ class CellularAutomataApp {
       throw new Error('WebGPU is unavailable in this browser or on this GPU.');
     }
 
-    const canvas = element<HTMLCanvasElement>('viewport');
     const renderer = new THREE.WebGPURenderer({
-      canvas,
+      canvas: elements.canvas,
       antialias: true,
       powerPreference: 'high-performance',
     });
@@ -129,10 +130,17 @@ class CellularAutomataApp {
     try {
       await renderer.init();
     } catch (error) {
-      throw new Error('WebGPU could not initialize on this GPU.', { cause: error });
+      renderer.dispose();
+      console.error(error);
+      throw new Error('WebGPU could not initialize on this GPU.');
     }
 
-    return new CellularAutomataApp(renderer);
+    try {
+      return new CellularAutomataApp(renderer, elements);
+    } catch (error) {
+      renderer.dispose();
+      throw error;
+    }
   }
 
   start(): void {
@@ -143,6 +151,14 @@ class CellularAutomataApp {
     this.resize();
     this.setStatus('WebGPU resident', 'ready');
     this.renderer.setAnimationLoop((time) => this.animate(time));
+  }
+
+  private element<T extends HTMLElement>(id: string): T {
+    const value = this.panel.querySelector<HTMLElement>(`#${id}`);
+    if (value === null) {
+      throw new Error(`Missing required control #${id}`);
+    }
+    return value as T;
   }
 
   private buildPanel(): void {
@@ -280,27 +296,27 @@ class CellularAutomataApp {
   }
 
   private bindPanelEvents(): void {
-    element<HTMLButtonElement>('toggle-run').addEventListener('click', () => this.setRunning(!this.running));
-    element<HTMLButtonElement>('step').addEventListener('click', () => {
+    this.element<HTMLButtonElement>('toggle-run').addEventListener('click', () => this.setRunning(!this.running));
+    this.element<HTMLButtonElement>('step').addEventListener('click', () => {
       if (this.running) {
         this.setRunning(false);
       }
       this.advanceSimulation();
     });
-    element<HTMLButtonElement>('reset').addEventListener('click', () => {
+    this.element<HTMLButtonElement>('reset').addEventListener('click', () => {
       this.automaton.reset(1);
       this.refreshCells();
     });
-    element<HTMLButtonElement>('reseed').addEventListener('click', () => {
+    this.element<HTMLButtonElement>('reseed').addEventListener('click', () => {
       this.automaton.reset();
       this.refreshCells();
     });
-    element<HTMLButtonElement>('clear').addEventListener('click', () => {
+    this.element<HTMLButtonElement>('clear').addEventListener('click', () => {
       this.automaton.clear();
       this.refreshCells();
     });
 
-    element<HTMLSelectElement>('preset').addEventListener('change', (event) => {
+    this.element<HTMLSelectElement>('preset').addEventListener('change', (event) => {
       const id = (event.currentTarget as HTMLSelectElement).value;
       if (id !== 'custom') {
         this.loadPreset(getPreset(id));
@@ -308,27 +324,27 @@ class CellularAutomataApp {
       }
     });
 
-    element<HTMLSelectElement>('bounds').addEventListener('change', (event) => {
+    this.element<HTMLSelectElement>('bounds').addEventListener('change', (event) => {
       this.bounds = Number((event.currentTarget as HTMLSelectElement).value);
       this.seedRadius = Math.min(this.seedRadius, Math.floor(this.bounds / 2));
-      const radius = element<HTMLInputElement>('seed-radius');
+      const radius = this.element<HTMLInputElement>('seed-radius');
       radius.max = String(Math.floor(this.bounds / 2));
       radius.value = String(this.seedRadius);
-      element<HTMLOutputElement>('radius-value').value = String(this.seedRadius);
+      this.element<HTMLOutputElement>('radius-value').value = String(this.seedRadius);
       this.rebuildAutomaton();
     });
 
-    element<HTMLInputElement>('tick-rate').addEventListener('input', (event) => {
+    this.element<HTMLInputElement>('tick-rate').addEventListener('input', (event) => {
       const sliderValue = Number((event.currentTarget as HTMLInputElement).value);
       this.tickRate = tickRateFromSlider(sliderValue);
-      element<HTMLOutputElement>('tick-rate-value').value = formatInteger(this.tickRate);
+      this.element<HTMLOutputElement>('tick-rate-value').value = formatInteger(this.tickRate);
       this.accumulator = 0;
     });
 
-    const density = element<HTMLInputElement>('seed-density');
+    const density = this.element<HTMLInputElement>('seed-density');
     density.addEventListener('input', () => {
       this.seedDensity = Number(density.value);
-      element<HTMLOutputElement>('density-value').value = `${Math.round(this.seedDensity * 100)}%`;
+      this.element<HTMLOutputElement>('density-value').value = `${Math.round(this.seedDensity * 100)}%`;
       this.automaton.configureSeed(this.seedDensity, this.seedRadius);
     });
     density.addEventListener('change', () => {
@@ -336,10 +352,10 @@ class CellularAutomataApp {
       this.refreshCells();
     });
 
-    const radius = element<HTMLInputElement>('seed-radius');
+    const radius = this.element<HTMLInputElement>('seed-radius');
     radius.addEventListener('input', () => {
       this.seedRadius = Number(radius.value);
-      element<HTMLOutputElement>('radius-value').value = String(this.seedRadius);
+      this.element<HTMLOutputElement>('radius-value').value = String(this.seedRadius);
       this.automaton.configureSeed(this.seedDensity, this.seedRadius);
     });
     radius.addEventListener('change', () => {
@@ -348,8 +364,8 @@ class CellularAutomataApp {
     });
 
     for (const id of ['survival', 'birth', 'states']) {
-      element<HTMLInputElement>(id).addEventListener('change', () => {
-        element<HTMLSelectElement>('preset').value = 'custom';
+      this.element<HTMLInputElement>(id).addEventListener('change', () => {
+        this.element<HTMLSelectElement>('preset').value = 'custom';
         this.applyRuleFromPanel();
       });
     }
@@ -360,47 +376,47 @@ class CellularAutomataApp {
           sibling.classList.toggle('selected', sibling === button);
           sibling.setAttribute('aria-pressed', String(sibling === button));
         }
-        element<HTMLSelectElement>('preset').value = 'custom';
+        this.element<HTMLSelectElement>('preset').value = 'custom';
         this.applyRuleFromPanel();
       });
     }
 
     const updateColors = (): void => {
       this.cellStyle.setColors(
-        element<HTMLInputElement>('color-low').value,
-        element<HTMLInputElement>('color-high').value,
+        this.element<HTMLInputElement>('color-low').value,
+        this.element<HTMLInputElement>('color-high').value,
       );
     };
-    element<HTMLInputElement>('color-low').addEventListener('input', updateColors);
-    element<HTMLInputElement>('color-high').addEventListener('input', updateColors);
-    element<HTMLSelectElement>('color-mode').addEventListener('change', (event) => {
+    this.element<HTMLInputElement>('color-low').addEventListener('input', updateColors);
+    this.element<HTMLInputElement>('color-high').addEventListener('input', updateColors);
+    this.element<HTMLSelectElement>('color-mode').addEventListener('change', (event) => {
       this.applyColorMode((event.currentTarget as HTMLSelectElement).value as ColorMode);
     });
 
-    const cellScale = element<HTMLInputElement>('cell-scale');
+    const cellScale = this.element<HTMLInputElement>('cell-scale');
     cellScale.addEventListener('input', () => {
       this.cellStyle.scale.value = Number(cellScale.value);
-      element<HTMLOutputElement>('cell-scale-value').value = `${Math.round(
+      this.element<HTMLOutputElement>('cell-scale-value').value = `${Math.round(
         this.cellStyle.scale.value * 100,
       )}%`;
     });
 
-    element<HTMLSelectElement>('render-scale').addEventListener('change', (event) => {
+    this.element<HTMLSelectElement>('render-scale').addEventListener('change', (event) => {
       this.renderScale = Number((event.currentTarget as HTMLSelectElement).value);
       this.resize();
     });
-    element<HTMLInputElement>('auto-orbit').addEventListener('change', (event) => {
+    this.element<HTMLInputElement>('auto-orbit').addEventListener('change', (event) => {
       this.orbit.autoRotate = (event.currentTarget as HTMLInputElement).checked;
     });
   }
 
   private loadPreset(preset: RulePreset): void {
-    element<HTMLInputElement>('survival').value = preset.survival.join(', ');
-    element<HTMLInputElement>('birth').value = preset.birth.join(', ');
-    element<HTMLInputElement>('states').value = String(preset.states);
-    element<HTMLSelectElement>('color-mode').value = preset.colorMode;
-    element<HTMLInputElement>('color-low').value = preset.colorLow;
-    element<HTMLInputElement>('color-high').value = preset.colorHigh;
+    this.element<HTMLInputElement>('survival').value = preset.survival.join(', ');
+    this.element<HTMLInputElement>('birth').value = preset.birth.join(', ');
+    this.element<HTMLInputElement>('states').value = String(preset.states);
+    this.element<HTMLSelectElement>('color-mode').value = preset.colorMode;
+    this.element<HTMLInputElement>('color-low').value = preset.colorLow;
+    this.element<HTMLInputElement>('color-high').value = preset.colorHigh;
     this.cellStyle.setColors(preset.colorLow, preset.colorHigh);
     this.applyColorMode(preset.colorMode);
 
@@ -416,14 +432,14 @@ class CellularAutomataApp {
 
   private applyColorMode(mode: ColorMode): void {
     this.cellStyle.setColorMode(mode);
-    element<HTMLElement>('color-low-label').textContent = mode === 'distance' ? 'Center' : 'Decay';
-    element<HTMLElement>('color-high-label').textContent = mode === 'distance' ? 'Edge' : 'Alive';
+    this.element<HTMLElement>('color-low-label').textContent = mode === 'distance' ? 'Center' : 'Decay';
+    this.element<HTMLElement>('color-high-label').textContent = mode === 'distance' ? 'Edge' : 'Alive';
   }
 
   private applyRuleFromPanel(): void {
-    const survivalInput = element<HTMLInputElement>('survival');
-    const birthInput = element<HTMLInputElement>('birth');
-    const statesInput = element<HTMLInputElement>('states');
+    const survivalInput = this.element<HTMLInputElement>('survival');
+    const birthInput = this.element<HTMLInputElement>('birth');
+    const statesInput = this.element<HTMLInputElement>('states');
     const survival = parseCounts(survivalInput.value);
     const birth = parseCounts(birthInput.value);
     const states = Number(statesInput.value);
@@ -458,7 +474,7 @@ class CellularAutomataApp {
 
   private updateRuleCode(survival: readonly number[], birth: readonly number[], states: number): void {
     const compact = (counts: readonly number[]): string => counts.join('');
-    element<HTMLElement>('rule-code').textContent = `S${compact(survival)} / B${compact(birth)} / ${states}`;
+    this.element<HTMLElement>('rule-code').textContent = `S${compact(survival)} / B${compact(birth)} / ${states}`;
   }
 
   private rebuildAutomaton(): void {
@@ -499,11 +515,11 @@ class CellularAutomataApp {
   private setRunning(running: boolean): void {
     this.running = running;
     this.accumulator = 0;
-    const toggle = element<HTMLButtonElement>('toggle-run');
+    const toggle = this.element<HTMLButtonElement>('toggle-run');
     toggle.title = running ? 'Pause' : 'Play';
     toggle.ariaLabel = running ? 'Pause' : 'Play';
     toggle.innerHTML = `<i data-lucide="${running ? 'pause' : 'play'}"></i>`;
-    element<HTMLElement>('run-state').textContent = running ? 'running' : 'paused';
+    this.element<HTMLElement>('run-state').textContent = running ? 'running' : 'paused';
     this.refreshIcons(toggle);
   }
 
@@ -555,10 +571,10 @@ class CellularAutomataApp {
     this.lastMetricsTime = time;
     const snapshot = this.automaton.snapshot();
 
-    element<HTMLElement>('metric-generation').textContent = formatInteger(snapshot.generation);
-    element<HTMLElement>('metric-tps').textContent = formatInteger(Math.round(this.simulationTps));
-    element<HTMLElement>('metric-fps').textContent = this.fps.toFixed(0);
-    element<HTMLElement>('metric-cells').textContent =
+    this.element<HTMLElement>('metric-generation').textContent = formatInteger(snapshot.generation);
+    this.element<HTMLElement>('metric-tps').textContent = formatInteger(Math.round(this.simulationTps));
+    this.element<HTMLElement>('metric-fps').textContent = this.fps.toFixed(0);
+    this.element<HTMLElement>('metric-cells').textContent =
       snapshot.cellCount >= 1_000_000
         ? `${(snapshot.cellCount / 1_000_000).toFixed(1)}m`
         : `${Math.round(snapshot.cellCount / 1000)}k`;
@@ -624,18 +640,42 @@ class CellularAutomataApp {
   }
 }
 
-async function boot(): Promise<void> {
-  const app = await CellularAutomataApp.create();
-  app.start();
-  window.addEventListener('pagehide', () => app.dispose(), { once: true });
-}
+export function mountCellularAutomata(elements: CellularAutomataElements): () => void {
+  let app: CellularAutomataApp | null = null;
+  let disposed = false;
 
-boot().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  const status = element<HTMLElement>('status');
-  element<HTMLElement>('status-text').textContent = message;
-  status.dataset.state = 'error';
-  status.setAttribute('role', 'alert');
-  document.body.classList.add('fatal-error');
-  console.error(error);
-});
+  void CellularAutomataApp.create(elements)
+    .then((createdApp) => {
+      if (disposed) {
+        createdApp.dispose();
+        return;
+      }
+
+      app = createdApp;
+      app.start();
+    })
+    .catch((error: unknown) => {
+      if (disposed) {
+        return;
+      }
+
+      app?.dispose();
+      app = null;
+      const message = error instanceof Error ? error.message : String(error);
+      elements.statusText.textContent = message;
+      elements.status.dataset.state = 'error';
+      elements.status.setAttribute('role', 'alert');
+      document.body.classList.add('fatal-error');
+      console.error(error);
+    });
+
+  return () => {
+    if (disposed) {
+      return;
+    }
+
+    disposed = true;
+    app?.dispose();
+    document.body.classList.remove('fatal-error');
+  };
+}

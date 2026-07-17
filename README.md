@@ -42,17 +42,20 @@ Drag to orbit, scroll or pinch to zoom, and use the control panel to pause, step
 
 ## Run the WebGPU compute experiment
 
-The `webgpu` application is a separate Three.js experiment that moves both the
-cellular automaton and its 3D state textures onto the GPU. It does not download
-the Rust/Bevy WebAssembly bundle.
+The `webgpu` application is a separate nextrs + React application that moves
+both the cellular automaton and its 3D state textures onto the GPU. It does not
+download the Rust/Bevy WebAssembly bundle. The Rust/Axum server only serves the
+client application; simulation and rendering stay in the browser.
 
 ```bash
 cd webgpu
-npm ci
-npm run dev
+cargo install cargo-nextrs-dev
+cd client && npm ci && cd ..
+cargo dev
 ```
 
-Then open `http://127.0.0.1:5173` in a browser with WebGPU support. See
+Then open `http://127.0.0.1:3000` in a browser with WebGPU support, or use the
+[production deployment](https://3d-cellular-automata.vercel.app). See
 [`webgpu/README.md`](webgpu/README.md) for the architecture and verification
 commands.
 

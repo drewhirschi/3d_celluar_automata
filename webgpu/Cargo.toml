@@ -1,0 +1,30 @@
+[package]
+name = "webgpu"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+default-run = "webgpu"
+
+[[bin]]
+name = "webgpu"
+path = "src/main.rs"
+
+[[bin]]
+name = "index"
+path = "api/index.rs"
+
+[build-dependencies]
+nextrs = { version = "=0.3.8", features = ["build", "tsx"] }
+
+[dependencies]
+nextrs = { version = "=0.3.8", features = ["vercel"] }
+axum = "0.8"
+dotenvy = "0.15"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+vercel_runtime = { version = "2", features = ["axum"] }
+http = "1"
+serde = { version = "1", features = ["derive"] }
+tower-livereload = "0.9"
+utoipa = "5"

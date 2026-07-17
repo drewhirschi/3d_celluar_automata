@@ -1,0 +1,4 @@
+[build]
+
+[alias]
+dev = "nextrs-dev --bin webgpu"
